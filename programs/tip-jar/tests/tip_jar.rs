@@ -249,3 +249,108 @@ fn tip_to_wrong_vault_fails() {
     assert!(ctx.tip(10).is_err());
     assert_eq!(ctx.token_balance(&ctx.owner_ata), 0);
 }
+
+#[test]
+fn prefunded_jar_pda_does_not_block_initialize() {
+    let mut ctx = setup();
+    let jar = ctx.jar;
+    ctx.svm.airdrop(&jar, 1_000_000).unwrap();
+    ctx.initialize().unwrap();
+}
+
+#[test]
+fn prefunded_vault_pda_does_not_block_initialize() {
+    let mut ctx = setup();
+    let vault = ctx.vault;
+    ctx.svm.airdrop(&vault, 1_000_000).unwrap();
+    ctx.initialize().unwrap();
+}
+
+#[test]
+fn withdraw_to_wrong_mint_destination_fails() {
+    let mut ctx = setup();
+    ctx.initialize().unwrap();
+    ctx.tip(500).unwrap();
+    let other_mint = CreateMint::new(&mut ctx.svm, &ctx.payer).decimals(6).send().unwrap();
+    let other_ata = CreateAssociatedTokenAccount::new(&mut ctx.svm, &ctx.payer, &other_mint)
+        .owner(&ctx.owner.pubkey())
+        .send()
+        .unwrap();
+    let owner = ctx.owner.insecure_clone();
+    assert!(ctx.withdraw(&owner, other_ata, 100).is_err());
+    assert_eq!(ctx.token_balance(&ctx.vault), 500);
+}
+
+#[test]
+fn withdraw_with_forged_jar_fails() {
+    let mut ctx = setup();
+    ctx.initialize().unwrap();
+    ctx.tip(500).unwrap();
+    let attacker = Keypair::new();
+    ctx.svm.airdrop(&attacker.pubkey(), 1_000_000_000).unwrap();
+    let attacker_ata = CreateAssociatedTokenAccount::new(&mut ctx.svm, &ctx.payer, &ctx.mint)
+        .owner(&attacker.pubkey())
+        .send()
+        .unwrap();
+    ctx.jar = attacker.pubkey();
+    assert!(ctx.withdraw(&attacker, attacker_ata, 100).is_err());
+    assert_eq!(ctx.token_balance(&ctx.vault), 500);
+}
+
+#[test]
+fn withdraw_with_other_owners_jar_and_victim_vault_fails() {
+    let mut ctx = setup();
+    ctx.initialize().unwrap();
+    ctx.tip(500).unwrap();
+    let attacker = Keypair::new();
+    ctx.svm.airdrop(&attacker.pubkey(), 1_000_000_000).unwrap();
+    let attacker_ata = CreateAssociatedTokenAccount::new(&mut ctx.svm, &ctx.payer, &ctx.mint)
+        .owner(&attacker.pubkey())
+        .send()
+        .unwrap();
+    let victim_vault = ctx.vault;
+    let (a_jar, _) = Pubkey::find_program_address(
+        &[b"jar", attacker.pubkey().as_ref(), ctx.mint.as_ref()],
+        &ctx.program_id,
+    );
+    let (a_vault, _) = Pubkey::find_program_address(&[b"vault", a_jar.as_ref()], &ctx.program_id);
+    ctx.owner = attacker.insecure_clone();
+    ctx.jar = a_jar;
+    ctx.vault = a_vault;
+    ctx.initialize().unwrap();
+    ctx.vault = victim_vault;
+    assert!(ctx.withdraw(&attacker, attacker_ata, 100).is_err());
+    assert_eq!(ctx.token_balance(&victim_vault), 500);
+}
+
+#[test]
+fn extreme_amounts_fail() {
+    let mut ctx = setup();
+    ctx.initialize().unwrap();
+    assert!(ctx.tip(u64::MAX).is_err());
+    ctx.tip(500).unwrap();
+    let owner = ctx.owner.insecure_clone();
+    let owner_ata = ctx.owner_ata;
+    assert!(ctx.withdraw(&owner, owner_ata, u64::MAX).is_err());
+    assert_eq!(ctx.token_balance(&ctx.vault), 500);
+}
+
+#[test]
+fn fake_token_program_rejected() {
+    let mut ctx = setup();
+    ctx.initialize().unwrap();
+    ctx.tip(500).unwrap();
+    let ix = Instruction::new_with_bytes(
+        ctx.program_id,
+        &amount_data(IX_WITHDRAW, 100),
+        vec![
+            AccountMeta::new_readonly(ctx.owner.pubkey(), true),
+            AccountMeta::new_readonly(ctx.jar, false),
+            AccountMeta::new(ctx.vault, false),
+            AccountMeta::new(ctx.owner_ata, false),
+            AccountMeta::new_readonly(ctx.program_id, false),
+        ],
+    );
+    let owner = ctx.owner.insecure_clone();
+    assert!(ctx.send(ix, &[&owner]).is_err());
+}
