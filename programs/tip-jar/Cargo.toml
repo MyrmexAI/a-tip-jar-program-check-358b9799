@@ -1,0 +1,29 @@
+[package]
+name = "tip-jar"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[features]
+no-entrypoint = []
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("solana"))'] }
+
+[dependencies]
+pinocchio = { version = "0.11.2", features = ["cpi"] }
+pinocchio-system = "0.6.1"
+pinocchio-token = "0.7.0"
+
+[dev-dependencies]
+litesvm = "0.18.0"
+litesvm-token = "0.18.0"
+solana-account = "4"
+solana-instruction = "3"
+solana-keypair = "3"
+solana-message = "4"
+solana-pubkey = { version = "4", features = ["curve25519"] }
+solana-signer = "3"
+solana-transaction = "4"
